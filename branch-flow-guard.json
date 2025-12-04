@@ -1,1 +1,22 @@
 
+{
+  "version": "1.0.0",
+  "timestamp": "%TIMESTAMP%",
+  "compliance": {
+    "allowed": %ALLOWED%,
+    "has_code_changes": %HAS_CODE%,
+    "violation_code": "%VIOLATION_CODE%"
+  },
+  "context": {
+    "repository": "%REPO%",
+    "pr_number": %PR_NUM%,
+    "head_branch": "%HEAD_REF%",
+    "base_branch": "%BASE_REF%",
+    "head_type": "%HEAD_TYPE%",
+    "base_type": "%BASE_TYPE%"
+  },
+  "ui": {
+    "message_md": "%MESSAGE_MD%",
+    "color": "%COLOR_HEX%"
+  }
+}
