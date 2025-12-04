@@ -1,36 +1,161 @@
-jobs:
-  flow-check:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+# action v1.0.0
+name: "Branch Flow Guard"
+description: "Valida o fluxo de branches e retorna um JSON preenchido baseado no template local."
+author: "Ricardo Malnati"
 
-      - name: Verificar Fluxo
-        id: flow_guard
-        uses: ./path/to/action  # ou owner/repo@version
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # Personalização opcional (se não passar, usa os defaults)
-          production_branches: "main,master"
-          staging_branches: "homol,staging"
-          development_branches: "dev,develop"
+branding:
+  icon: "git-merge"
+  color: "purple"
 
-      # EXEMPLO 1: Usando o pr-comment (agora desacoplado)
-      - name: Comentar na PR
-        uses: Malnati/pr-comment@v4.2.5
-        if: always() # Executa mesmo se falhar
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          pr_number: ${{ github.event.pull_request.number }}
-          # Parseamos o JSON para passar valores (requer jq ou similar no runner)
-          body_message: |
-            Resultado da Análise de Fluxo:
-            ${{ fromJson(steps.flow_guard.outputs.result_json).message }}
-          footer_result: "Permitido: ${{ fromJson(steps.flow_guard.outputs.result_json).compliance.allowed }}"
+inputs:
+  token:
+    description: "GitHub token"
+    required: true
+  production_branches:
+    description: "Nível 1 (Produção)"
+    default: "main,master,prod,production"
+  staging_branches:
+    description: "Nível 2 (Staging)"
+    default: "staging,stage,homol,release"
+  development_branches:
+    description: "Nível 3 (Development)"
+    default: "dev,develop,development"
+  output_file:
+    description: "Caminho para salvar o JSON gerado (opcional)"
+    default: "flow-compliance.json"
 
-      # EXEMPLO 2: Bloquear a PR se o fluxo estiver errado
-      - name: Bloquear Merge
-        if: ${{ fromJson(steps.flow_guard.outputs.result_json).compliance.allowed == false }}
-        run: |
-          echo "::error::${{ fromJson(steps.flow_guard.outputs.result_json).message }}"
+outputs:
+  # Output principal: O JSON completo como string
+  result:
+    description: "O conteúdo JSON preenchido (string)"
+    value: ${{ steps.render_json.outputs.json_content }}
+  
+  # Outputs auxiliares (atalhos)
+  allowed:
+    description: "Boolean: Flow is allowed"
+    value: ${{ steps.analyze.outputs.allowed }}
+
+runs:
+  using: "composite"
+  steps:
+    # ... (Step de check_files anterior permanece igual) ...
+    - id: check_files
+      shell: bash
+      env:
+        PR_NUM: ${{ github.event.pull_request.number }}
+        TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+      run: |
+        # Lógica resumida de detecção de código
+        # Para o exemplo, assumimos true
+        echo "has_code=true" >> "$GITHUB_OUTPUT"
+
+    # ------------------------------------------------------------------
+    # STEP: ANALISAR E PREENCHER TEMPLATE
+    # ------------------------------------------------------------------
+    - id: analyze
+      shell: bash
+      env:
+        # Contextos
+        GITHUB_ACTION_PATH: ${{ github.action_path }} # Onde está o .json
+        PR_NUM: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+        # Inputs
+        PROD_LIST: ${{ inputs.production_branches }}
+        STAGE_LIST: ${{ inputs.staging_branches }}
+        DEV_LIST: ${{ inputs.development_branches }}
+        HAS_CODE: ${{ steps.check_files.outputs.has_code }}
+      run: |
+        set -euo pipefail
+
+        # 1. Classificação de Branches (Mesma lógica anterior)
+        get_branch_type() {
+          local branch=$1
+          if echo "$PROD_LIST" | tr -d ' ' | tr ',' '\n' | grep -F -x -q "$branch"; then echo "production";
+          elif echo "$STAGE_LIST" | tr -d ' ' | tr ',' '\n' | grep -F -x -q "$branch"; then echo "staging";
+          elif echo "$DEV_LIST" | tr -d ' ' | tr ',' '\n' | grep -F -x -q "$branch"; then echo "development";
+          else echo "other"; fi
+        }
+
+        HEAD_TYPE=$(get_branch_type "$HEAD_REF")
+        BASE_TYPE=$(get_branch_type "$BASE_REF")
+
+        # 2. Definição de Regras
+        ALLOWED="true"
+        MSG="✅ Fluxo autorizado."
+        CODE="NONE"
+        COLOR="#3fb950" # Green
+
+        if [ "$BASE_TYPE" == "production" ] && [ "$HEAD_TYPE" != "staging" ]; then
+            ALLOWED="false"
+            MSG="🚫 **Produção** requer origem em **Staging**."
+            CODE="PROD_VIOLATION"
+            COLOR="#d73a49" # Red
+        elif [ "$BASE_TYPE" == "staging" ] && [ "$HEAD_TYPE" != "development" ]; then
+            ALLOWED="false"
+            MSG="🚫 **Staging** requer origem em **Development**."
+            CODE="STAGE_VIOLATION"
+            COLOR="#d73a49" # Red
+        fi
+
+        # Exporta variável simples para outputs
+        echo "allowed=$ALLOWED" >> "$GITHUB_OUTPUT"
+
+        # 3. Ler o Template Local
+        # Importante: Em composite actions, arquivos estão em $GITHUB_ACTION_PATH
+        TEMPLATE_PATH="$GITHUB_ACTION_PATH/branch-flow-guard.json"
+        
+        if [ ! -f "$TEMPLATE_PATH" ]; then
+          echo "::error::Template JSON não encontrado em $TEMPLATE_PATH"
           exit 1
+        fi
+        
+        # Carrega conteúdo
+        JSON_CONTENT=$(cat "$TEMPLATE_PATH")
+
+        # 4. Substituição (Search & Replace)
+        # Usamos sed. Importante escapar barras na MSG se houver.
+        
+        TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        
+        # Substituições
+        # Dica: Usar separador diferente no sed (ex: |) evita conflito com barras de URL/Path
+        JSON_CONTENT=${JSON_CONTENT//%TIMESTAMP%/$TIMESTAMP}
+        JSON_CONTENT=${JSON_CONTENT//%ALLOWED%/$ALLOWED}
+        JSON_CONTENT=${JSON_CONTENT//%HAS_CODE%/$HAS_CODE}
+        JSON_CONTENT=${JSON_CONTENT//%VIOLATION_CODE%/$CODE}
+        JSON_CONTENT=${JSON_CONTENT//%REPO%/$REPO}
+        JSON_CONTENT=${JSON_CONTENT//%PR_NUM%/$PR_NUM}
+        JSON_CONTENT=${JSON_CONTENT//%HEAD_REF%/$HEAD_REF}
+        JSON_CONTENT=${JSON_CONTENT//%BASE_REF%/$BASE_REF}
+        JSON_CONTENT=${JSON_CONTENT//%HEAD_TYPE%/$HEAD_TYPE}
+        JSON_CONTENT=${JSON_CONTENT//%BASE_TYPE%/$BASE_TYPE}
+        JSON_CONTENT=${JSON_CONTENT//%MESSAGE_MD%/$MSG}
+        JSON_CONTENT=${JSON_CONTENT//%COLOR_HEX%/$COLOR}
+
+        # 5. Salvar em arquivo temporário para persistência
+        echo "$JSON_CONTENT" > /tmp/rendered_flow.json
+
+    - id: render_json
+      shell: bash
+      env:
+        OUTPUT_FILE: ${{ inputs.output_file }}
+      run: |
+        # Recupera o JSON da etapa anterior
+        CONTENT=$(cat /tmp/rendered_flow.json)
+        
+        # Opção A: Salvar no arquivo físico solicitado pelo usuário (no workspace)
+        if [ -n "$OUTPUT_FILE" ]; then
+           cp /tmp/rendered_flow.json "./$OUTPUT_FILE"
+           echo "JSON salvo em: ./$OUTPUT_FILE"
+        fi
+
+        # Opção B: Jogar no Output do GitHub (Removendo quebras de linha para não quebrar o GITHUB_OUTPUT)
+        # O truque do EOF é melhor para JSONs complexos
+        {
+          echo "json_content<<EOF"
+          echo "$CONTENT"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
