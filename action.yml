@@ -182,7 +182,7 @@ runs:
 
         echo "allowed=$ALLOWED" >> "$GITHUB_OUTPUT"
 
-        TEMPLATE_PATH="$GITHUB_ACTION_PATH/branch-flow-guard.json"
+        TEMPLATE_PATH="$GITHUB_ACTION_PATH/message.json"
         if [ ! -f "$TEMPLATE_PATH" ]; then
           echo "::error::Template JSON missing at $TEMPLATE_PATH"
           exit 1
