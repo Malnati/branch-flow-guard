@@ -1,6 +1,5 @@
-
 {
-  "version": "1.0.0",
+  "version": "1.2.0",
   "timestamp": "%TIMESTAMP%",
   "compliance": {
     "allowed": %ALLOWED%,
@@ -17,6 +16,7 @@
   },
   "ui": {
     "message_md": "%MESSAGE_MD%",
+    "guidance_md": "%GUIDANCE%",
     "color": "%COLOR_HEX%"
   }
 }
