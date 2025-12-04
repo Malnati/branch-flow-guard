@@ -1,6 +1,6 @@
-# Malnati/branch-flow-guard@v1.1.0
+# Malnati/branch-flow-guard@v1.2.0
 name: "Branch Flow Guard Pro"
-description: "Valida o fluxo de branches e retorna um JSON preenchido baseado no template local."
+description: "Valida o fluxo de branches e retorna um JSON preenchido com orientações dinâmicas."
 author: "Ricardo Malnati"
 
 branding:
@@ -36,7 +36,7 @@ runs:
   using: "composite"
   steps:
     # ------------------------------------------------------------------
-    # STEP 0: DIAGNÓSTICO DE INPUTS (Log Rico)
+    # STEP 0: DIAGNÓSTICO E CONFIGURAÇÃO (Melhorado)
     # ------------------------------------------------------------------
     - id: debug_inputs
       shell: bash
@@ -49,35 +49,45 @@ runs:
       run: |
         echo "::group::🔍 Step 0: Governance Rules Configuration"
         echo "---------------------------------------------------------------"
-        echo "🛡️  Branch Flow Definitions"
+        echo "🛡️  Branch Flow Definitions (Active Rules)"
         echo "---------------------------------------------------------------"
         
         echo "1️⃣  Production (Level 1):"
         echo "    Branches: [$PROD_LIST]"
-        echo "    👉 Regra: Só aceita merges vindos de Level 2 (Staging)."
+        echo "    👉 Aceita apenas origem: Level 2 (Staging)"
         echo ""
         
         echo "2️⃣  Staging (Level 2):"
         echo "    Branches: [$STAGE_LIST]"
-        echo "    👉 Regra: Só aceita merges vindos de Level 3 (Development)."
+        echo "    👉 Aceita apenas origem: Level 3 (Development)"
         echo ""
         
         echo "3️⃣  Development (Level 3):"
         echo "    Branches: [$DEV_LIST]"
-        echo "    👉 Regra: Origem livre (Features, Hotfixes, etc)."
+        echo "    👉 Aceita origem livre (Features, Hotfixes, etc)"
         echo "---------------------------------------------------------------"
         
-        echo "📂 Configuration:"
-        echo "   - Output JSON Path: $OUT_FILE"
+        # MENSAGEM EDUCATIVA PARA O DESENVOLVEDOR
+        echo "💡 NOTA DE CONFIGURAÇÃO:"
+        echo "   As regras acima são definidas pelos inputs desta Action."
+        echo "   Você pode alterar as branches elegíveis ajustando os parâmetros:"
+        echo "   - production_branches"
+        echo "   - staging_branches"
+        echo "   - development_branches"
+        echo "   No arquivo do seu workflow."
+        echo "---------------------------------------------------------------"
+        
+        echo "📂 System:"
+        echo "   - Output Path: $OUT_FILE"
         if [ -n "$HAS_TOKEN" ]; then
            echo "   - Token: PROVIDED (Masked)"
         else
-           echo "   - Token: ❌ MISSING (Action will fail)"
+           echo "   - Token: ❌ MISSING"
         fi
         echo "::endgroup::"
 
     # ------------------------------------------------------------------
-    # STEP 0.5: VERIFICAÇÃO DE PERMISSÕES
+    # STEP 0.5: PERMISSÕES
     # ------------------------------------------------------------------
     - id: debug_perms
       shell: bash
@@ -87,28 +97,20 @@ runs:
         PR_NUM: ${{ github.event.pull_request.number }}
       run: |
         echo "::group::🔐 Step 0.5: Access & Connectivity Check"
-        
-        # Teste de conectividade simples com a API de arquivos da PR
-        # Isso valida se o token tem permissão de leitura (contents: read)
         URL="https://api.github.com/repos/$REPO/pulls/$PR_NUM/files"
-        
-        echo "📡 Testing API Access (Read PR Files)..."
+        echo "📡 Testing API Access..."
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "$URL")
         
         if [ "$HTTP_CODE" == "200" ]; then
-           echo "   ✅ Status 200 OK - Acesso aos arquivos confirmado."
+           echo "   ✅ Status 200 OK - Access granted."
         else
-           echo "   ⚠️ Status $HTTP_CODE - Falha ao acessar arquivos da PR."
-           echo "      Verifique se o token tem a permissão 'contents: read'."
+           echo "   ⚠️ Status $HTTP_CODE - Failed to access PR files."
+           echo "      Verify 'contents: read' permission."
         fi
-        
-        echo ""
-        echo "📋 REQUIRED PERMISSIONS:"
-        echo "   1. contents: read  (Obrigatório para detectar mudanças de código)"
         echo "::endgroup::"
 
     # ------------------------------------------------------------------
-    # STEP 1: DETECTAR MUDANÇAS DE CÓDIGO
+    # STEP 1: DETECTAR CÓDIGO
     # ------------------------------------------------------------------
     - id: check_files
       shell: bash
@@ -118,12 +120,11 @@ runs:
         REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
-        # Para este exemplo simplificado, assumimos true.
-        # Em produção, aqui iria o curl para listar arquivos e grep nas extensões.
+        # Simplificado para o exemplo
         echo "has_code=true" >> "$GITHUB_OUTPUT"
 
     # ------------------------------------------------------------------
-    # STEP 2: ANALISAR E PREENCHER TEMPLATE
+    # STEP 2: ANALISAR E GERAR MENSAGENS DINÂMICAS
     # ------------------------------------------------------------------
     - id: analyze
       shell: bash
@@ -133,6 +134,7 @@ runs:
         REPO: ${{ github.repository }}
         HEAD_REF: ${{ github.event.pull_request.head.ref }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
+        # Inputs limpos
         PROD_LIST: ${{ inputs.production_branches }}
         STAGE_LIST: ${{ inputs.staging_branches }}
         DEV_LIST: ${{ inputs.development_branches }}
@@ -152,35 +154,44 @@ runs:
         BASE_TYPE=$(get_branch_type "$BASE_REF")
 
         ALLOWED="true"
-        MSG="✅ Fluxo autorizado."
+        MSG="✅ **Autorizado:** Fluxo correto de branches."
+        GUIDANCE="Pode prosseguir com o Code Review."
         CODE="NONE"
-        COLOR="#3fb950" # Green
+        COLOR="#3fb950"
 
+        # Lógica de Bloqueio + Orientação Dinâmica
         if [ "$BASE_TYPE" == "production" ] && [ "$HEAD_TYPE" != "staging" ]; then
             ALLOWED="false"
-            MSG="🚫 **Produção** requer origem em **Staging**."
+            MSG="🚫 **Produção** ($BASE_REF) requer origem em **Staging**."
             CODE="PROD_VIOLATION"
-            COLOR="#d73a49" # Red
+            COLOR="#d73a49"
+            
+            # Formatação bonita da lista
+            CLEAN_LIST=$(echo "$STAGE_LIST" | sed 's/,/, /g')
+            GUIDANCE="Para mergear em \`$BASE_REF\`, a branch de origem deve ser uma destas: **[$CLEAN_LIST]**."
+            
         elif [ "$BASE_TYPE" == "staging" ] && [ "$HEAD_TYPE" != "development" ]; then
             ALLOWED="false"
-            MSG="🚫 **Staging** requer origem em **Development**."
+            MSG="🚫 **Staging** ($BASE_REF) requer origem em **Development**."
             CODE="STAGE_VIOLATION"
-            COLOR="#d73a49" # Red
+            COLOR="#d73a49"
+            
+            CLEAN_LIST=$(echo "$DEV_LIST" | sed 's/,/, /g')
+            GUIDANCE="Para mergear em \`$BASE_REF\`, a branch de origem deve ser uma destas: **[$CLEAN_LIST]**."
         fi
 
         echo "allowed=$ALLOWED" >> "$GITHUB_OUTPUT"
 
         TEMPLATE_PATH="$GITHUB_ACTION_PATH/branch-flow-guard.json"
-        
         if [ ! -f "$TEMPLATE_PATH" ]; then
-          echo "::error::Template JSON não encontrado em $TEMPLATE_PATH"
+          echo "::error::Template JSON missing at $TEMPLATE_PATH"
           exit 1
         fi
         
         JSON_CONTENT=$(cat "$TEMPLATE_PATH")
         TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         
-        # Substituições
+        # Substituições (incluindo o novo %GUIDANCE%)
         JSON_CONTENT=${JSON_CONTENT//%TIMESTAMP%/$TIMESTAMP}
         JSON_CONTENT=${JSON_CONTENT//%ALLOWED%/$ALLOWED}
         JSON_CONTENT=${JSON_CONTENT//%HAS_CODE%/$HAS_CODE}
@@ -192,12 +203,13 @@ runs:
         JSON_CONTENT=${JSON_CONTENT//%HEAD_TYPE%/$HEAD_TYPE}
         JSON_CONTENT=${JSON_CONTENT//%BASE_TYPE%/$BASE_TYPE}
         JSON_CONTENT=${JSON_CONTENT//%MESSAGE_MD%/$MSG}
+        JSON_CONTENT=${JSON_CONTENT//%GUIDANCE%/$GUIDANCE}
         JSON_CONTENT=${JSON_CONTENT//%COLOR_HEX%/$COLOR}
 
         echo "$JSON_CONTENT" > /tmp/rendered_flow.json
 
     # ------------------------------------------------------------------
-    # STEP 3: GERAR OUTPUT
+    # STEP 3: OUTPUT
     # ------------------------------------------------------------------
     - id: render_json
       shell: bash
@@ -205,12 +217,10 @@ runs:
         OUTPUT_FILE: ${{ inputs.output_file }}
       run: |
         CONTENT=$(cat /tmp/rendered_flow.json)
-        
         if [ -n "$OUTPUT_FILE" ]; then
            cp /tmp/rendered_flow.json "./$OUTPUT_FILE"
            echo "JSON salvo em: ./$OUTPUT_FILE"
         fi
-
         {
           echo "json_content<<EOF"
           echo "$CONTENT"
