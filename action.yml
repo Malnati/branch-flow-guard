@@ -1,4 +1,4 @@
-# Malnati/branch-flow-guard@v1.2.0
+# Malnati/branch-flow-guard@v1.2.1
 name: "Branch Flow Guard Pro"
 description: "Valida o fluxo de branches e retorna um JSON preenchido com orientações dinâmicas."
 author: "Ricardo Malnati"
